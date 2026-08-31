@@ -309,13 +309,54 @@ KillerHub:AddTask(Players.PlayerRemoving:Connect(updateIgnoreListCache))
 KillerHub:AddTask(LocalPlayer.CharacterAdded:Connect(updateIgnoreListCache))
 updateIgnoreListCache()
 
--- Verificación estricta de pared (ignorando el estado de WallCheck para Auto Shoot)
+-- Comprueba si el arma/personaje tiene la trayectoria bloqueada por una pared
+local function isGunBlocked(targetPos)
+    local char = LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return true end
+
+    local origin = char.HumanoidRootPart.Position
+    if char.HumanoidRootPart:FindFirstChild("GunRaycastAttachment") then
+        origin = char.HumanoidRootPart.GunRaycastAttachment.WorldPosition
+    else
+        local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+        if rightHand then origin = rightHand.Position end
+    end
+
+    local direction = targetPos - origin
+    if direction.Magnitude < 0.1 then return false end
+
+    local ignoreListTemp = table.clone(cachedIgnoreList)
+    local currentOrigin = origin
+    local rayPasses = 0
+
+    while direction.Magnitude > 0.1 and rayPasses < 4 do
+        rayPasses = rayPasses + 1
+        mapCastParams.FilterDescendantsInstances = ignoreListTemp
+        local ray = workspace:Raycast(currentOrigin, direction, mapCastParams)
+        if not ray then return false end
+
+        local hitInst = ray.Instance
+        if hitInst and hitInst.CanCollide and hitInst.Transparency < 0.8 then
+            return true
+        else
+            table.insert(ignoreListTemp, hitInst)
+            currentOrigin = ray.Position + (direction.Unit * 0.05)
+            direction = targetPos - currentOrigin
+        end
+    end
+
+    return false
+end
+
+-- Verificación estricta de visibilidad desde la cámara y la posición del arma
 local function isStrictlyVisible(targetChar, targetPart)
     if not targetChar or not targetPart then return false end
     local origin = Camera.CFrame.Position
     local targetPos = targetPart.Position
-    local direction = targetPos - origin
     
+    if isGunBlocked(targetPos) then return false end
+
+    local direction = targetPos - origin
     local tempIgnore = table.clone(cachedIgnoreList)
     local currentOrigin = origin
     local rayPasses = 0
@@ -343,6 +384,7 @@ local function isStrictlyVisible(targetChar, targetPart)
     return true
 end
 
+-- WallCheck estricto orientado únicamente al HumanoidRootPart
 local function getSmartTargetPart(targetChar)
     if not targetChar then return nil, true end
     local hrp = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso") or targetChar:FindFirstChild("UpperTorso")
@@ -358,43 +400,38 @@ local function getSmartTargetPart(targetChar)
     local origin = Camera.CFrame.Position
     local ignoreListTemp = table.clone(cachedIgnoreList)
 
-    local partsToScan = {
-        hrp,
-        targetChar:FindFirstChild("Head"),
-        targetChar:FindFirstChild("LeftHand") or targetChar:FindFirstChild("Left Arm"),
-        targetChar:FindFirstChild("RightHand") or targetChar:FindFirstChild("Right Arm")
-    }
-    
-    for i = 1, #partsToScan do
-        local part = partsToScan[i]
-        if part then
-            local targetPos = part.Position
-            local currentOrigin = origin
-            local direction = targetPos - currentOrigin
-            local blocked = false
-            local rayPasses = 0
+    local targetPos = hrp.Position
+    local currentOrigin = origin
+    local direction = targetPos - currentOrigin
+    local blocked = false
+    local rayPasses = 0
 
-            while direction.Magnitude > 0.1 and rayPasses < 5 do
-                rayPasses = rayPasses + 1
-                mapCastParams.FilterDescendantsInstances = ignoreListTemp
-                local ray = workspace:Raycast(currentOrigin, direction, mapCastParams)
-                if not ray then break end
+    while direction.Magnitude > 0.1 and rayPasses < 5 do
+        rayPasses = rayPasses + 1
+        mapCastParams.FilterDescendantsInstances = ignoreListTemp
+        local ray = workspace:Raycast(currentOrigin, direction, mapCastParams)
+        if not ray then break end
 
-                local hitInst = ray.Instance
-                if hitInst and hitInst.CanCollide and hitInst.Transparency < 0.8 then
-                    blocked = true
-                    break 
-                else
-                    table.insert(ignoreListTemp, hitInst)
-                    currentOrigin = ray.Position + (direction.Unit * 0.05)
-                    direction = targetPos - currentOrigin
-                end
-            end
+        local hitInst = ray.Instance
+        if hitInst and hitInst:IsDescendantOf(targetChar) then
+            break
+        end
 
-            if not blocked then return part, false end
+        if hitInst and hitInst.CanCollide and hitInst.Transparency < 0.8 then
+            blocked = true
+            break 
+        else
+            table.insert(ignoreListTemp, hitInst)
+            currentOrigin = ray.Position + (direction.Unit * 0.05)
+            direction = targetPos - currentOrigin
         end
     end
-    return hrp, true
+
+    if not blocked and isGunBlocked(targetPos) then
+        blocked = true
+    end
+
+    return hrp, blocked
 end
 
 local function getFloorHeight(targetHrp, targetChar)
@@ -606,7 +643,7 @@ local renderConn = RunService.RenderStepped:Connect(function(dt)
 
                 if handOnScreen and predOnScreen then
                     local shotType = Flag("Sheriff_ShotType", "Normal")
-                    LeadTimeLine.Color = (handLineIsBlocked and shotType ~= "Piercer Bullet") and color3RGB(255, 255, 255) or color3RGB(35, 255, 35)
+                    LeadTimeLine.Color = (handLineIsBlocked and shotType ~= "Piercer Bullet") and color3RGB(35, 255, 35) or color3RGB(35, 255, 35)
                     LeadTimeLine.From = vec2New(handScreenPos.X, handScreenPos.Y)
                     LeadTimeLine.To = vec2New(predScreenPos.X, predScreenPos.Y)
                     LeadTimeLine.Visible = true
@@ -634,6 +671,10 @@ local function fireAtMurdererDirectly()
         if bestPart and (not isBlocked or shotType == "Piercer Bullet") then 
             local finalPredictedPos = getPredictedPosition(targetChar, bestPart)
             if finalPredictedPos then
+                if shotType ~= "Piercer Bullet" and isGunBlocked(finalPredictedPos) then
+                    return
+                end
+
                 autoEquipWeapon()
                 local gun, _ = getGunLocation()
                 if gun and gun:FindFirstChild("Shoot") then
@@ -676,7 +717,6 @@ local autoShootConn = RunService.RenderStepped:Connect(function()
     end
 
     local bestPart, _ = getSmartTargetPart(targetChar)
-    -- Verificación estricta de visión: Jamás dispara a través de pared si no está visible
     if bestPart and isStrictlyVisible(targetChar, bestPart) then
         lastAutoShootTime = now
         fireAtMurdererDirectly()
