@@ -1,5 +1,5 @@
 -- ============================================================================
--- 👾 KILLER HUB | ENGINE V11.5 - SHERIFF SUITE (STRICT AUTO-SHOOT LINE OF SIGHT)
+-- 👾 KILLER HUB | ENGINE V11.6 - SHERIFF SUITE (OPTIMIZED PIERCER FIX)
 -- ============================================================================
 local KillerHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/Salayer09/KillerHub/refs/heads/main/Slayer.lua"))()
 
@@ -309,7 +309,6 @@ KillerHub:AddTask(Players.PlayerRemoving:Connect(updateIgnoreListCache))
 KillerHub:AddTask(LocalPlayer.CharacterAdded:Connect(updateIgnoreListCache))
 updateIgnoreListCache()
 
--- Comprueba si el arma/personaje tiene la trayectoria bloqueada por una pared
 local function isGunBlocked(targetPos)
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return true end
@@ -348,7 +347,6 @@ local function isGunBlocked(targetPos)
     return false
 end
 
--- Verificación estricta de visibilidad desde la cámara y la posición del arma
 local function isStrictlyVisible(targetChar, targetPart)
     if not targetChar or not targetPart then return false end
     local origin = Camera.CFrame.Position
@@ -384,7 +382,6 @@ local function isStrictlyVisible(targetChar, targetPart)
     return true
 end
 
--- WallCheck estricto orientado únicamente al HumanoidRootPart
 local function getSmartTargetPart(targetChar)
     if not targetChar then return nil, true end
     local hrp = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso") or targetChar:FindFirstChild("UpperTorso")
@@ -441,17 +438,19 @@ local function getFloorHeight(targetHrp, targetChar)
     return ray and ray.Position.Y or nil
 end
 
--- Prediction Engine
+-- Prediction Engine (Optimizado para distancias reales y Piercer)
 local function getPredictedPosition(targetChar, targetPart, customDelta)
     if not targetChar or not targetPart then return nil, nil, nil end
     local hrp = targetChar:FindFirstChild("HumanoidRootPart")
     local humanoid = targetChar:FindFirstChildOfClass("Humanoid")
-    local localHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp or not humanoid or humanoid.Health <= 0 or not localHrp then return nil, nil, nil end
+    if not hrp or not humanoid or humanoid.Health <= 0 then return nil, nil, nil end
 
     local activeDT = customDelta or emaDeltaTime
     local targetPosition = targetPart.Position
-    local distance = (targetPosition - localHrp.Position).Magnitude
+
+    -- Usa la cámara como referencia de distancia para no romper cálculos estando -200,000 bajo tierra
+    local referencePos = Camera and Camera.CFrame.Position or targetPosition
+    local distance = (targetPosition - referencePos).Magnitude
 
     local moveMag = humanoid.MoveDirection.Magnitude
     local rawPhysicsVel = hrp.AssemblyLinearVelocity
@@ -502,7 +501,6 @@ local function getPredictedPosition(targetChar, targetPart, customDelta)
     local prioritizePing = Flag("Sheriff_PrioritizePing", false)
     local vScale = Flag("Sheriff_VScale", 100)
     local hScale = Flag("Sheriff_HScale", 100)
-    local shotType = Flag("Sheriff_ShotType", "Normal")
 
     local effectiveHLatency = 0
     local effectiveVLatency = 0
@@ -521,18 +519,8 @@ local function getPredictedPosition(targetChar, targetPart, customDelta)
         effectiveVLatency = (cappedVScale / 1000) * PREDICTION_BOOST
     end
 
-    if shotType == "Piercer Bullet" then
-        if hScale == 0 then
-            effectiveHLatency = (28 / 1000) * PREDICTION_BOOST
-            horizontalShift = vec3New(smoothedVelocity.X, 0, smoothedVelocity.Z) * effectiveHLatency * predictionWeight
-        elseif hScale > 100 then
-            horizontalShift = vec3New(smoothedVelocity.X, 0, smoothedVelocity.Z) * effectiveHLatency * predictionWeight * 0.90
-        else
-            horizontalShift = vec3New(smoothedVelocity.X, 0, smoothedVelocity.Z) * effectiveHLatency * predictionWeight * 0.33
-        end
-    else
-        horizontalShift = vec3New(smoothedVelocity.X, 0, smoothedVelocity.Z) * effectiveHLatency * predictionWeight
-    end
+    -- Predicción horizontal limpia y precisa para Piercer Bullet y Normal
+    horizontalShift = vec3New(smoothedVelocity.X, 0, smoothedVelocity.Z) * effectiveHLatency * predictionWeight
 
     if vScale > 0 then
         local isAir = (humanoid.FloorMaterial == Enum.Material.Air)
@@ -643,7 +631,7 @@ local renderConn = RunService.RenderStepped:Connect(function(dt)
 
                 if handOnScreen and predOnScreen then
                     local shotType = Flag("Sheriff_ShotType", "Normal")
-                    LeadTimeLine.Color = (handLineIsBlocked and shotType ~= "Piercer Bullet") and color3RGB(35, 255, 35) or color3RGB(35, 255, 35)
+                    LeadTimeLine.Color = (handLineIsBlocked and shotType ~= "Piercer Bullet") and color3RGB(255, 255, 255) or color3RGB(35, 255, 35)
                     LeadTimeLine.From = vec2New(handScreenPos.X, handScreenPos.Y)
                     LeadTimeLine.To = vec2New(predScreenPos.X, predScreenPos.Y)
                     LeadTimeLine.Visible = true
@@ -662,7 +650,7 @@ local function fireAtMurdererDirectly()
     if handLineIsBlocked and shotType ~= "Piercer Bullet" then return end
 
     local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return end 
+    if not char then return end 
 
     local murderer = getMurderer()
     if murderer and murderer.Character then
@@ -678,14 +666,29 @@ local function fireAtMurdererDirectly()
                 autoEquipWeapon()
                 local gun, _ = getGunLocation()
                 if gun and gun:FindFirstChild("Shoot") then
-                    local originCFrame = char.HumanoidRootPart.CFrame
-                    if char.HumanoidRootPart:FindFirstChild("GunRaycastAttachment") then 
+                    local originCFrame = char.HumanoidRootPart and char.HumanoidRootPart.CFrame or Camera.CFrame
+                    if char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart:FindFirstChild("GunRaycastAttachment") then 
                         originCFrame = char.HumanoidRootPart.GunRaycastAttachment.WorldCFrame 
                     end
 
+                    -- Piercer Bullet: Siempre dispara 100% horizontal a la altura del torso objetivo
                     if shotType == "Piercer Bullet" then
-                        local dir = (finalPredictedPos - char.HumanoidRootPart.Position).Unit
-                        originCFrame = cframeNew(finalPredictedPos - (dir * 1.3), finalPredictedPos)
+                        local camLook = Camera.CFrame.LookVector
+                        local horizDir = vec3New(camLook.X, 0, camLook.Z)
+                        
+                        if horizDir.Magnitude < 0.01 then
+                            local hrp = targetChar:FindFirstChild("HumanoidRootPart")
+                            if hrp then horizDir = vec3New(hrp.CFrame.LookVector.X, 0, hrp.CFrame.LookVector.Z) end
+                        end
+                        
+                        if horizDir.Magnitude < 0.01 then
+                            horizDir = vec3New(1, 0, 0)
+                        else
+                            horizDir = horizDir.Unit
+                        end
+
+                        local spawnOrigin = finalPredictedPos - (horizDir * 1.5)
+                        originCFrame = cframeNew(spawnOrigin, finalPredictedPos)
                     end
 
                     gun.Shoot:FireServer(originCFrame, cframeNew(finalPredictedPos))
@@ -695,7 +698,7 @@ local function fireAtMurdererDirectly()
     end
 end
 
--- Auto Shoot Engine (Strict Obstruction Safety)
+-- Auto Shoot Engine
 local lastAutoShootTime = 0
 local autoShootConn = RunService.RenderStepped:Connect(function()
     if not Flag("Sheriff_AutoShoot", false) then return end
