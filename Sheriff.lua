@@ -297,11 +297,6 @@ local function updateIgnoreListCache()
     table.clear(cachedIgnoreList)
     if LocalPlayer.Character then table.insert(cachedIgnoreList, LocalPlayer.Character) end
     table.insert(cachedIgnoreList, Camera)
-    local allPlayers = Players:GetPlayers()
-    for i = 1, #allPlayers do 
-        local pChar = allPlayers[i].Character
-        if pChar then table.insert(cachedIgnoreList, pChar) end 
-    end
 end
 
 KillerHub:AddTask(Players.PlayerAdded:Connect(updateIgnoreListCache))
@@ -309,7 +304,7 @@ KillerHub:AddTask(Players.PlayerRemoving:Connect(updateIgnoreListCache))
 KillerHub:AddTask(LocalPlayer.CharacterAdded:Connect(updateIgnoreListCache))
 updateIgnoreListCache()
 
-local function isGunBlocked(targetPos)
+local function isGunBlocked(targetPos, targetChar)
     local char = LocalPlayer.Character
     if not char or not char:FindFirstChild("HumanoidRootPart") then return true end
 
@@ -328,13 +323,17 @@ local function isGunBlocked(targetPos)
     local currentOrigin = origin
     local rayPasses = 0
 
-    while direction.Magnitude > 0.1 and rayPasses < 4 do
+    while direction.Magnitude > 0.1 and rayPasses < 5 do
         rayPasses = rayPasses + 1
         mapCastParams.FilterDescendantsInstances = ignoreListTemp
         local ray = workspace:Raycast(currentOrigin, direction, mapCastParams)
         if not ray then return false end
 
         local hitInst = ray.Instance
+        if targetChar and hitInst:IsDescendantOf(targetChar) then
+            return false
+        end
+
         if hitInst and hitInst.CanCollide and hitInst.Transparency < 0.8 then
             return true
         else
@@ -352,14 +351,14 @@ local function isStrictlyVisible(targetChar, targetPart)
     local origin = Camera.CFrame.Position
     local targetPos = targetPart.Position
     
-    if isGunBlocked(targetPos) then return false end
+    if isGunBlocked(targetPos, targetChar) then return false end
 
     local direction = targetPos - origin
     local tempIgnore = table.clone(cachedIgnoreList)
     local currentOrigin = origin
     local rayPasses = 0
 
-    while direction.Magnitude > 0.1 and rayPasses < 4 do
+    while direction.Magnitude > 0.1 and rayPasses < 5 do
         rayPasses = rayPasses + 1
         mapCastParams.FilterDescendantsInstances = tempIgnore
         local ray = workspace:Raycast(currentOrigin, direction, mapCastParams)
@@ -384,7 +383,7 @@ end
 
 local function getSmartTargetPart(targetChar)
     if not targetChar then return nil, true end
-    local hrp = targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("Torso") or targetChar:FindFirstChild("UpperTorso")
+    local hrp = targetChar:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil, true end
     
     local wallCheck = Flag("Sheriff_WallCheck", true)
@@ -424,7 +423,7 @@ local function getSmartTargetPart(targetChar)
         end
     end
 
-    if not blocked and isGunBlocked(targetPos) then
+    if not blocked and isGunBlocked(targetPos, targetChar) then
         blocked = true
     end
 
@@ -659,7 +658,7 @@ local function fireAtMurdererDirectly()
         if bestPart and (not isBlocked or shotType == "Piercer Bullet") then 
             local finalPredictedPos = getPredictedPosition(targetChar, bestPart)
             if finalPredictedPos then
-                if shotType ~= "Piercer Bullet" and isGunBlocked(finalPredictedPos) then
+                if shotType ~= "Piercer Bullet" and isGunBlocked(finalPredictedPos, targetChar) then
                     return
                 end
 
